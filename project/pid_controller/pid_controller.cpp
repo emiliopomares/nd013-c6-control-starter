@@ -47,6 +47,12 @@ double PID::TotalError() {
    control = this->p * this->current_cte + 
       this->d * (this->current_cte - this->last_cte) / this->dt +
       this->i * (this->total_cte);
+   if(control>this->max) {
+      control = this->max;
+   }
+   if(control<this->min) {
+      control = this->min;
+   }
    return control;
 }
 

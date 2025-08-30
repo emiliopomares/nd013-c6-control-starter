@@ -227,6 +227,14 @@ int main ()
 
   PID pid_steer = PID();
   PID pid_throttle = PID();
+  const double KThp = 1.0;
+  const double KThd = 1.0;
+  const double KThi = 1.0;
+  pid_throttle.Init(KThp, KThd, KThi, 1.0, -1.0);
+  const double KStp = 1.0;
+  const double KStd = 1.0;
+  const double KSti = 1.0;
+  pid_steer.Init(KStp, KStd, KSti, 1.2, -1.2);
 
   h.onMessage([&pid_steer, &pid_throttle, &new_delta_time, &timer, &prev_timer, &i, &prev_timer](uWS::WebSocket<uWS::SERVER> ws, char *data, size_t length, uWS::OpCode opCode)
   {
@@ -288,8 +296,8 @@ int main ()
           /**
           * TODO (step 3): uncomment these lines
           **/
-//           // Update the delta time with the previous command
-//           pid_steer.UpdateDeltaTime(new_delta_time);
+          // Update the delta time with the previous command
+          pid_steer.UpdateDeltaTime(new_delta_time);
 
           // Compute steer error
           double error_steer;
@@ -300,23 +308,73 @@ int main ()
           /**
           * TODO (step 3): compute the steer error (error_steer) from the position and the desired trajectory
           **/
-//           error_steer = 0;
+          constexpr double PI = 3.14159265358979323846;
+          const double x1 = x_points[x_points.size()-1];
+          const double x2 = x_points[x_points.size()-2];
+          const double y1 = y_points[y_points.size()-1];
+          const double y2 = y_points[y_points.size()-2];
+          const double target_yaw = angle_between_points(x2, y2, x1, y1);
+          //error_steer
+
+          // compute header error
+          heading_error = std::fmod(target_yaw - yaw + PI, 2.0 * PI);
+          if (heading_error < 0)
+            heading_error += 2.0 * PI;
+          heading_error = heading_error - PI;
+
+          // compute cross-track error
+          double cte;
+          double px = x_position.back();
+          double py = y_position.back();
+          // segment vector
+          double dx = x2 - x1;
+          double dy = y2 - y1;
+          double segLen2 = dx*dx + dy*dy;
+          if (segLen2 == 0.0) {
+            // degenerate segment: distance to point x1,y1
+            double vx = px - x1;
+            double vy = py - y1;
+            cte = std::copysign(std::sqrt(vx*vx + vy*vy), 1.0); // no meaningful sign, return positive distance
+          }
+          else {
+
+            // project point onto segment, get parameter t in [0,1]
+            double t = ((px - x1)*dx + (py - y1)*dy) / segLen2;
+            if (t < 0.0) t = 0.0;
+            if (t > 1.0) t = 1.0;
+
+            // nearest point on segment
+            double nx = x1 + t*dx;
+            double ny = y1 + t*dy;
+
+            // lateral vector from nearest point to vehicle
+            double lx = px - nx;
+            double ly = py - ny;
+            double dist = std::sqrt(lx*lx + ly*ly);
+
+            // sign: use cross product between segment and vector from nearest point to vehicle
+            double cross = dx*ly - dy*lx; // cross >0 => vehicle is left of segment direction
+            cte = (cross >= 0.0) ? dist : -dist;
+          }
+
+          error_steer = header_error + std::atan2(KStp * cte, velocity + 0.01);
+
 
           /**
           * TODO (step 3): uncomment these lines
           **/
-//           // Compute control to apply
-//           pid_steer.UpdateError(error_steer);
-//           steer_output = pid_steer.TotalError();
+          // Compute control to apply
+          pid_steer.UpdateError(error_steer);
+          steer_output = pid_steer.TotalError();
 
-//           // Save data
-//           file_steer.seekg(std::ios::beg);
-//           for(int j=0; j < i - 1; ++j) {
-//               file_steer.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
-//           }
-//           file_steer  << i ;
-//           file_steer  << " " << error_steer;
-//           file_steer  << " " << steer_output << endl;
+          // Save data
+          file_steer.seekg(std::ios::beg);
+          for(int j=0; j < i - 1; ++j) {
+              file_steer.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
+          }
+          file_steer  << i ;
+          file_steer  << " " << error_steer;
+          file_steer  << " " << steer_output << endl;
 
           ////////////////////////////////////////
           // Throttle control
@@ -325,8 +383,8 @@ int main ()
           /**
           * TODO (step 2): uncomment these lines
           **/
-//           // Update the delta time with the previous command
-//           pid_throttle.UpdateDeltaTime(new_delta_time);
+          // Update the delta time with the previous command
+          pid_throttle.UpdateDeltaTime(new_delta_time);
 
           // Compute error of speed
           double error_throttle;
@@ -334,7 +392,7 @@ int main ()
           * TODO (step 2): compute the throttle error (error_throttle) from the position and the desired speed
           **/
           // modify the following line for step 2
-          error_throttle = 0;
+          error_throttle = v_points[v_points.size()-1] - velocity;
 
 
 
@@ -344,28 +402,28 @@ int main ()
           /**
           * TODO (step 2): uncomment these lines
           **/
-//           // Compute control to apply
-//           pid_throttle.UpdateError(error_throttle);
-//           double throttle = pid_throttle.TotalError();
+          // Compute control to apply
+          pid_throttle.UpdateError(error_throttle);
+          double throttle = pid_throttle.TotalError();
 
-//           // Adapt the negative throttle to break
-//           if (throttle > 0.0) {
-//             throttle_output = throttle;
-//             brake_output = 0;
-//           } else {
-//             throttle_output = 0;
-//             brake_output = -throttle;
-//           }
+          // Adapt the negative throttle to break
+          if (throttle > 0.0) {
+            throttle_output = throttle;
+            brake_output = 0;
+          } else {
+            throttle_output = 0;
+            brake_output = -throttle;
+          }
 
-//           // Save data
-//           file_throttle.seekg(std::ios::beg);
-//           for(int j=0; j < i - 1; ++j){
-//               file_throttle.ignore(std::numeric_limits<std::streamsize>::max(),'\n');
-//           }
-//           file_throttle  << i ;
-//           file_throttle  << " " << error_throttle;
-//           file_throttle  << " " << brake_output;
-//           file_throttle  << " " << throttle_output << endl;
+          // Save data
+          file_throttle.seekg(std::ios::beg);
+          for(int j=0; j < i - 1; ++j){
+               file_throttle.ignore(std::numeric_limits<std::streamsize>::max(),'\n');
+          }
+          file_throttle  << i ;
+          file_throttle  << " " << error_throttle;
+          file_throttle  << " " << brake_output;
+          file_throttle  << " " << throttle_output << endl;
 
 
           // Send control
@@ -403,7 +461,7 @@ int main ()
   h.onConnection([](uWS::WebSocket<uWS::SERVER> ws, uWS::HttpRequest req)
   {
       cout << "Connected!!!" << endl;
-    });
+  });
 
 
   h.onDisconnection([&h](uWS::WebSocket<uWS::SERVER> ws, int code, char *message, size_t length)
