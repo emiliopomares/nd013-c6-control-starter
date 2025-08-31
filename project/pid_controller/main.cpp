@@ -230,13 +230,14 @@ int main ()
 
   PID pid_steer = PID();
   PID pid_throttle = PID();
-  const double KThp = 0.0025;
-  const double KThi = 0.025;
-  const double KThd = 0.1;
+  const double KThp = 0.1;
+  const double KThi = 0.04;//1.2;//0.025;
+  const double KThd = 0.00;//0.2;//0.3;
   pid_throttle.Init(KThp, KThi, KThd, 1.0, -1.0);
-  const double KStp = 0.0025;
-  const double KSti = 0;
-  const double KStd = 0;
+
+  const double KStp = 0.05;
+  const double KSti = 0.000020;//0.0025;
+  const double KStd = 0.000000;//0.0055;
   pid_steer.Init(KStp, KSti, KStd, 1.2, -1.2);
 
   h.onMessage([&pid_steer, &pid_throttle, &new_delta_time, &timer, &prev_timer, &i, &prev_timer](uWS::WebSocket<uWS::SERVER> ws, char *data, size_t length, uWS::OpCode opCode)
@@ -305,7 +306,7 @@ int main ()
           double steer_output; 
           constexpr double PI = 3.14159265358979323846;
 
-          const double KSteer = 0.1;
+          
           // compute cross-track error using nearest path segment
           double px = x_position;
           double py = y_position;
@@ -313,8 +314,10 @@ int main ()
           double best_dist = std::numeric_limits<double>::max();
           double best_cte = 0.0;
           double best_target_yaw = 0.0;
+          int best_segment_index = -1;
+          double bestx1, besty1;
 
-          for (size_t i = 0; i + 1 < x_points.size(); ++i) {
+          for (size_t i = x_points.size()-2; i + 1 < x_points.size(); ++i) {
               double x1 = x_points[i];
               double y1 = y_points[i];
               double x2 = x_points[i+1];
@@ -346,6 +349,9 @@ int main ()
 
               if (dist < best_dist) {
                   best_dist = dist;
+                  best_segment_index = i;
+                  bestx1 = x1;
+                  besty1 = y1;
 
                   // sign using cross product
                   double cross = dx*ly - dy*lx;
@@ -362,16 +368,19 @@ int main ()
           // compute heading error
           double heading_error = std::fmod(target_yaw - yaw + PI, 2.0 * PI);
           if (heading_error < 0) heading_error += 2.0 * PI;
-          heading_error = heading_error - PI;
-          heading_error = yaw - target_yaw;
+          heading_error = target_yaw - yaw;//heading_error - PI;
+  
+          // compute "Stanley" error
+          const double KSteer = 0.2;
+          double stanley_error = -std::atan2(KSteer * cte, velocity + 0.0001);
           file_.seekg(std::ios::beg);
           for(int j=0; j < i - 1; ++j){
                file_.ignore(std::numeric_limits<std::streamsize>::max(),'\n');
           }
-          file_ << i << " yaw:" << yaw << " target_yaw:" << " " << target_yaw << " heading_error:" << heading_error << endl;
+          file_ << i << " " << target_yaw << " " << yaw << " || " << best_segment_index << " " << bestx1 << " " << besty1 << " || " << x_points.back() << " " << y_points.back() << x_points.size() << " " << px << " " << py << " " << " yaw:" << yaw << " target_yaw:" << " " << target_yaw << " heading_error:" << heading_error << " stanley_error:" << stanley_error << " plannedx:" << x_points.back() << " plannedy:" << y_points.back() << endl;
 
           // total steer error = header error + Stanley error
-          const double error_steer = heading_error;// + std::atan2(KSteer * cte, velocity + 0.01);
+          const double error_steer = heading_error;//stanley_error; //heading_error;// - stanley_error;
 
 
           /**
