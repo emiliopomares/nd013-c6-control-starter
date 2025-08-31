@@ -26,6 +26,7 @@ void PID::Init(double Kpi, double Kii, double Kdi, double output_lim_maxi, doubl
    this->max = output_lim_maxi;
    this->total_cte = 0;
    this->last_cte = 0;
+   this->current_cte = 0;
 }
 
 
@@ -44,8 +45,10 @@ double PID::TotalError() {
     * The code should return a value in the interval [output_lim_mini, output_lim_maxi]
    */
    double control;
+   double dt = this->dt;
+   if (dt<1e-6) dt=1e-6;
    control = this->p * this->current_cte + 
-      this->d * (this->current_cte - this->last_cte) / this->dt +
+      this->d * (this->current_cte - this->last_cte) / dt +
       this->i * (this->total_cte);
    if(control>this->max) {
       control = this->max;

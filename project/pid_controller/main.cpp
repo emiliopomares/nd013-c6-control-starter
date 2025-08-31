@@ -209,6 +209,9 @@ int main ()
   fstream file_throttle;
   file_throttle.open("throttle_pid_data.txt", std::ofstream::out | std::ofstream::trunc);
   file_throttle.close();
+  fstream file_;
+  file_.open("output.txt", std::ofstream::out | std::ofstream::trunc);
+  file_.close();
 
   time_t prev_timer;
   time_t timer;
@@ -227,14 +230,14 @@ int main ()
 
   PID pid_steer = PID();
   PID pid_throttle = PID();
-  const double KThp = 1.0;
-  const double KThd = 1.0;
-  const double KThi = 1.0;
-  pid_throttle.Init(KThp, KThd, KThi, 1.0, -1.0);
-  const double KStp = 1.0;
-  const double KStd = 1.0;
-  const double KSti = 1.0;
-  pid_steer.Init(KStp, KStd, KSti, 1.2, -1.2);
+  const double KThp = 0.0025;
+  const double KThi = 0.025;
+  const double KThd = 0.1;
+  pid_throttle.Init(KThp, KThi, KThd, 1.0, -1.0);
+  const double KStp = 0.0025;
+  const double KSti = 0;
+  const double KStd = 0;
+  pid_steer.Init(KStp, KSti, KStd, 1.2, -1.2);
 
   h.onMessage([&pid_steer, &pid_throttle, &new_delta_time, &timer, &prev_timer, &i, &prev_timer](uWS::WebSocket<uWS::SERVER> ws, char *data, size_t length, uWS::OpCode opCode)
   {
@@ -249,6 +252,8 @@ int main ()
           file_steer.open("steer_pid_data.txt");
           fstream file_throttle;
           file_throttle.open("throttle_pid_data.txt");
+          fstream file_;
+          file_.open("output.txt");
 
           vector<double> x_points = data["traj_x"];
           vector<double> y_points = data["traj_y"];
@@ -289,75 +294,84 @@ int main ()
           new_delta_time = difftime(timer, prev_timer);
           prev_timer = timer;
 
-          ////////////////////////////////////////
-          // Steering control
-          ////////////////////////////////////////
-
-          /**
-          * TODO (step 3): uncomment these lines
-          **/
-          // Update the delta time with the previous command
-          pid_steer.UpdateDeltaTime(new_delta_time);
-
-          // Compute steer error
-          double error_steer;
-
-
-          double steer_output;
-
-          /**
-          * TODO (step 3): compute the steer error (error_steer) from the position and the desired trajectory
-          **/
+          //////////////////////////////////////// 
+          // Steering control 
+          //////////////////////////////////////// 
+          
+          // Update the delta time with the previous command 
+          pid_steer.UpdateDeltaTime(new_delta_time); 
+          
+          // Compute steer error double error_steer; 
+          double steer_output; 
           constexpr double PI = 3.14159265358979323846;
-          const double x1 = x_points[x_points.size()-1];
-          const double x2 = x_points[x_points.size()-2];
-          const double y1 = y_points[y_points.size()-1];
-          const double y2 = y_points[y_points.size()-2];
-          const double target_yaw = angle_between_points(x2, y2, x1, y1);
-          //error_steer
 
-          // compute header error
-          heading_error = std::fmod(target_yaw - yaw + PI, 2.0 * PI);
-          if (heading_error < 0)
-            heading_error += 2.0 * PI;
+          const double KSteer = 0.1;
+          // compute cross-track error using nearest path segment
+          double px = x_position;
+          double py = y_position;
+
+          double best_dist = std::numeric_limits<double>::max();
+          double best_cte = 0.0;
+          double best_target_yaw = 0.0;
+
+          for (size_t i = 0; i + 1 < x_points.size(); ++i) {
+              double x1 = x_points[i];
+              double y1 = y_points[i];
+              double x2 = x_points[i+1];
+              double y2 = y_points[i+1];
+
+              double dx = x2 - x1;
+              double dy = y2 - y1;
+              double segLenSqr = dx*dx + dy*dy;
+
+              double t = 0.0;
+              double nx, ny;
+
+              if (segLenSqr > 1e-9) {
+                  // projection factor
+                  t = ((px - x1)*dx + (py - y1)*dy) / segLenSqr;
+                  if (t < 0.0) t = 0.0;
+                  if (t > 1.0) t = 1.0;
+                  nx = x1 + t*dx;
+                  ny = y1 + t*dy;
+              } else {
+                  // degenerate segment
+                  nx = x1;
+                  ny = y1;
+              }
+
+              double lx = px - nx;
+              double ly = py - ny;
+              double dist = std::sqrt(lx*lx + ly*ly);
+
+              if (dist < best_dist) {
+                  best_dist = dist;
+
+                  // sign using cross product
+                  double cross = dx*ly - dy*lx;
+                  best_cte = (cross >= 0.0) ? dist : -dist;
+
+                  // also compute yaw of this segment
+                  best_target_yaw = std::atan2(dy, dx);
+              }
+          }
+
+          double cte = best_cte;
+          double target_yaw = best_target_yaw;
+
+          // compute heading error
+          double heading_error = std::fmod(target_yaw - yaw + PI, 2.0 * PI);
+          if (heading_error < 0) heading_error += 2.0 * PI;
           heading_error = heading_error - PI;
-
-          // compute cross-track error
-          double cte;
-          double px = x_position.back();
-          double py = y_position.back();
-          // segment vector
-          double dx = x2 - x1;
-          double dy = y2 - y1;
-          double segLen2 = dx*dx + dy*dy;
-          if (segLen2 == 0.0) {
-            // degenerate segment: distance to point x1,y1
-            double vx = px - x1;
-            double vy = py - y1;
-            cte = std::copysign(std::sqrt(vx*vx + vy*vy), 1.0); // no meaningful sign, return positive distance
+          heading_error = yaw - target_yaw;
+          file_.seekg(std::ios::beg);
+          for(int j=0; j < i - 1; ++j){
+               file_.ignore(std::numeric_limits<std::streamsize>::max(),'\n');
           }
-          else {
+          file_ << i << " yaw:" << yaw << " target_yaw:" << " " << target_yaw << " heading_error:" << heading_error << endl;
 
-            // project point onto segment, get parameter t in [0,1]
-            double t = ((px - x1)*dx + (py - y1)*dy) / segLen2;
-            if (t < 0.0) t = 0.0;
-            if (t > 1.0) t = 1.0;
-
-            // nearest point on segment
-            double nx = x1 + t*dx;
-            double ny = y1 + t*dy;
-
-            // lateral vector from nearest point to vehicle
-            double lx = px - nx;
-            double ly = py - ny;
-            double dist = std::sqrt(lx*lx + ly*ly);
-
-            // sign: use cross product between segment and vector from nearest point to vehicle
-            double cross = dx*ly - dy*lx; // cross >0 => vehicle is left of segment direction
-            cte = (cross >= 0.0) ? dist : -dist;
-          }
-
-          error_steer = header_error + std::atan2(KStp * cte, velocity + 0.01);
+          // total steer error = header error + Stanley error
+          const double error_steer = heading_error;// + std::atan2(KSteer * cte, velocity + 0.01);
 
 
           /**
@@ -392,19 +406,20 @@ int main ()
           * TODO (step 2): compute the throttle error (error_throttle) from the position and the desired speed
           **/
           // modify the following line for step 2
-          error_throttle = v_points[v_points.size()-1] - velocity;
+          error_throttle = v_points.back() - velocity;
 
 
 
           double throttle_output;
           double brake_output;
-
+          
           /**
           * TODO (step 2): uncomment these lines
           **/
           // Compute control to apply
           pid_throttle.UpdateError(error_throttle);
           double throttle = pid_throttle.TotalError();
+          
 
           // Adapt the negative throttle to break
           if (throttle > 0.0) {
